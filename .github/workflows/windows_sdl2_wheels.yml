@@ -6,6 +6,7 @@ on:
       - 'win/common.py'
       - 'win/sdl2.py'
       - 'ci/windows_ci.ps1'
+      - 'ci/kivy-stable-test-constraints.txt'
       - '.github/workflows/windows_sdl2_wheels.yml'
   push:
     branches:
@@ -15,6 +16,7 @@ on:
       - 'win/common.py'
       - 'win/sdl2.py'
       - 'ci/windows_ci.ps1'
+      - 'ci/kivy-stable-test-constraints.txt'
       - '.github/workflows/windows_sdl2_wheels.yml'
 
 env:
@@ -22,7 +24,6 @@ env:
   KIVY_BUILD_DIR: kivy_build
   KIVY_BUILD_CACHE: kivy_build_cache
   PACKAGE_TARGET: sdl2
-  KIVY_GL_BACKEND: angle_sdl2
   PYTHONPATH: .
 
 jobs:
@@ -111,4 +112,4 @@ jobs:
     - name: Test package
       run: |
         . .\ci\windows_ci.ps1
-        Test-kivy
+        Test-kivy -KivyTestTarget stable

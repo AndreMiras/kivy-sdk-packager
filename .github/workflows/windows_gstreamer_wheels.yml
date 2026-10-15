@@ -6,6 +6,7 @@ on:
       - 'win/common.py'
       - 'win/gstreamer.py'
       - 'ci/windows_ci.ps1'
+      - 'ci/kivy-stable-test-constraints.txt'
       - '.github/workflows/windows_gstreamer_wheels.yml'
   push:
     branches:
@@ -15,6 +16,7 @@ on:
       - 'win/common.py'
       - 'win/gstreamer.py'
       - 'ci/windows_ci.ps1'
+      - 'ci/kivy-stable-test-constraints.txt'
       - '.github/workflows/windows_gstreamer_wheels.yml'
 
 env:
@@ -22,7 +24,6 @@ env:
   KIVY_BUILD_DIR: kivy_build
   KIVY_BUILD_CACHE: kivy_build_cache
   PACKAGE_TARGET: gstreamer
-  KIVY_GL_BACKEND: angle_sdl3
   PYTHONPATH: .
 
 
@@ -62,6 +63,19 @@ jobs:
       matrix:
         python: [ '3.9', '3.10', '3.11', '3.12', '3.13', '3.14' ]
         arch: ['x64']
+        include:
+          - python: '3.9'
+            kivy-test-target: stable
+          - python: '3.10'
+            kivy-test-target: stable
+          - python: '3.11'
+            kivy-test-target: development
+          - python: '3.12'
+            kivy-test-target: development
+          - python: '3.13'
+            kivy-test-target: development
+          - python: '3.14'
+            kivy-test-target: development
     env:
       PACKAGE_ARCH: ${{ matrix.arch }}
     steps:
@@ -112,4 +126,4 @@ jobs:
     - name: Test package
       run: |
         . .\ci\windows_ci.ps1
-        Test-kivy
+        Test-kivy -KivyTestTarget '${{ matrix.kivy-test-target }}'
