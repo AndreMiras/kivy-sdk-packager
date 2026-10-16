@@ -34,8 +34,9 @@ DLL_HASHES = {
     'libGLESv2.dll':
         '74e330560308882a5e093f761b6afcfba93a39b535bf2a55ef1b0612dfb3aaf6',
 }
-# The shader compiler can be lazy-loaded. Its installed hash is always checked;
-# if it is loaded, its path/hash must match too. EGL/GLES must be witnessed.
+# EGL/GLES must be loaded from the verified wheel. The shader compiler can be
+# shared with Windows; report its loaded origin separately. Its installed copy
+# is still verified unconditionally by verify_installed().
 REQUIRED_MODULES = {'libegl.dll', 'libglesv2.dll'}
 
 
@@ -179,18 +180,29 @@ def loaded_snapshot(manifest, required=False):
     expected = {name.lower(): digest for name, digest in manifest['dlls'].items()}
     directory = Path(sys.prefix) / 'share' / 'angle' / 'bin'
     records = []
+    shader_compilers = []
     found = set()
     for path in module_paths():
         name = path.name.lower()
         if name not in expected:
             continue
-        require(canonical_path(path) == canonical_path(directory / path.name),
-                'ANGLE DLL loaded from unexpected directory: {}'.format(path))
+        from_bundle = (canonical_path(path)
+                       == canonical_path(directory / path.name))
+        if name in REQUIRED_MODULES:
+            require(from_bundle,
+                    'ANGLE DLL loaded from unexpected directory: {}'.format(path))
         digest = sha256(path)
-        require(digest == expected[name],
-                'Loaded ANGLE DLL hash mismatch: {}'.format(path))
+        matches_bundle = digest == expected[name]
+        if name in REQUIRED_MODULES or from_bundle:
+            require(matches_bundle,
+                    'Loaded ANGLE DLL hash mismatch: {}'.format(path))
         found.add(name)
-        records.append({'path': str(path), 'sha256': digest})
+        record = {'path': str(path), 'sha256': digest}
+        if name in REQUIRED_MODULES:
+            records.append(record)
+        else:
+            shader_compilers.append({**record, 'from_bundle': from_bundle,
+                                     'matches_bundle': matches_bundle})
     cgl = sys.modules.get('kivy.graphics.cgl')
     backend = cgl.cgl_get_initialized_backend_name() if cgl else None
     complete = REQUIRED_MODULES.issubset(found) and backend == manifest['backend']
@@ -198,7 +210,8 @@ def loaded_snapshot(manifest, required=False):
         require(complete, 'No loaded EGL/GLES witness with initialized backend {} '
                 '(found {}; backend {})'.format(
                     manifest['backend'], sorted(found), backend))
-    return {'modules': records, 'initialized_backend': backend,
+    return {'modules': records, 'shader_compilers': shader_compilers,
+            'initialized_backend': backend,
             'missing_modules': sorted(set(expected) - found), 'complete': complete}
 
 
