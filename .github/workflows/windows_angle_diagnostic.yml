@@ -1,0 +1,74 @@
+name: ANGLE local-wheel diagnostic
+
+on:
+  push:
+    branches:
+      - ci/angle-local-wheel-diagnostic
+    paths:
+      - '.github/workflows/windows_angle_diagnostic.yml'
+      - 'ci/windows_angle_diagnostic.ps1'
+      - 'ci/angle_dll_probe.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  angle_diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.9'
+            kivy-test-target: stable
+          - python: '3.10'
+            kivy-test-target: stable
+          - python: '3.11'
+            kivy-test-target: development
+          - python: '3.12'
+            kivy-test-target: development
+          - python: '3.13'
+            kivy-test-target: development
+          - python: '3.14'
+            kivy-test-target: development
+    env:
+      PACKAGE_TARGET: angle
+      PYTHONPATH: .
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: x64
+      # Reuse the completed ac16dfc run; this workflow has no native build job.
+      - name: Download baseline native artifact
+        uses: actions/download-artifact@v4.1.8
+        with:
+          repository: AndreMiras/kivy-sdk-packager
+          run-id: 38953844827
+          name: angle_dlls--
+          path: diagnostic/native
+          github-token: ${{ github.token }}
+      - name: Download baseline wheels
+        uses: actions/download-artifact@v4.1.8
+        with:
+          repository: AndreMiras/kivy-sdk-packager
+          run-id: 38953844827
+          name: angle_wheels-${{ matrix.python }}-x64
+          path: dist
+          github-token: ${{ github.token }}
+      - name: Test Kivy with verified local ANGLE wheels
+        run: |
+          .\ci\windows_angle_diagnostic.ps1 -KivyTestTarget '${{ matrix.kivy-test-target }}'
+      - name: Upload identity evidence
+        if: always()
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: angle_identity-${{ matrix.python }}-x64
+          path: |
+            diagnostic/angle-manifest.json
+            diagnostic/angle-evidence.json
+          if-no-files-found: warn
