@@ -8,6 +8,7 @@ on:
       - 'ci/windows_ci.ps1'
       - 'ci/kivy-stable-test-constraints.txt'
       - 'ci/check_wheel_origins.py'
+      - 'ci/glew_smoke.py'
       - '.github/workflows/windows_glew_wheels.yml'
   push:
     branches:
@@ -19,6 +20,7 @@ on:
       - 'ci/windows_ci.ps1'
       - 'ci/kivy-stable-test-constraints.txt'
       - 'ci/check_wheel_origins.py'
+      - 'ci/glew_smoke.py'
       - '.github/workflows/windows_glew_wheels.yml'
 
 env:
@@ -106,6 +108,42 @@ jobs:
       with:
         name: glew_wheels-${{ matrix.python }}-${{ matrix.arch }}
         path: dist
+    - name: Test package
+      run: |
+        . .\ci\windows_ci.ps1
+        Test-kivy -KivyTestTarget '${{ matrix.kivy-test-target }}'
+    - name: Set up software OpenGL for GLEW smoke
+      if: matrix.python == '3.9' || matrix.python == '3.10'
+      uses: ssciwr/setup-mesa-dist-win@2dfeaebfa514f74c2b8cd8d27108c31486d33e72 # v3
+      with:
+        version: '26.0.3'
+        build-type: release-msvc
+        deployment-choice: '1'
+    - name: Smoke published Kivy with candidate GLEW
+      if: matrix.python == '3.9' || matrix.python == '3.10'
+      env:
+        GALLIUM_DRIVER: llvmpipe
+        KIVY_GL_BACKEND: glew
+        KIVY_NO_ARGS: '1'
+        PIP_CONFIG_FILE: NUL
+      run: |
+        $wheels = @(Get-ChildItem -LiteralPath dist -Filter '*.whl' -File |
+          Where-Object { $_.Name -match '^kivy_deps[._]glew-' })
+        if ($wheels.Count -ne 1) { throw 'Expected one candidate GLEW runtime wheel' }
+        $venv = Join-Path $env:RUNNER_TEMP 'glew-smoke'
+        python -m venv $venv
+        if ($LASTEXITCODE -ne 0) { throw 'Creating the GLEW smoke environment failed' }
+        $python = Join-Path $venv 'Scripts/python.exe'
+        & $python -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw 'Updating smoke pip failed' }
+        & $python -m pip install --only-binary=:all: 'Kivy==2.3.1'
+        if ($LASTEXITCODE -ne 0) { throw 'Installing published Kivy failed' }
+        & $python -m pip install --no-index --no-deps --force-reinstall $wheels[0].FullName
+        if ($LASTEXITCODE -ne 0) { throw 'Installing candidate GLEW failed' }
+        & $python -m pip check
+        if ($LASTEXITCODE -ne 0) { throw 'Smoke dependencies are inconsistent' }
+        & $python ci/glew_smoke.py $wheels[0].FullName
+        if ($LASTEXITCODE -ne 0) { throw 'The GLEW rendering smoke failed' }
     - name: Install MSYS2
       run: choco install msys2
     - name: Upload wheels to server
@@ -124,7 +162,3 @@ jobs:
         TWINE_PASSWORD: ${{ secrets.pypi_password }}
       run: |
         twine upload --non-interactive dist/*
-    - name: Test package
-      run: |
-        . .\ci\windows_ci.ps1
-        Test-kivy -KivyTestTarget '${{ matrix.kivy-test-target }}'

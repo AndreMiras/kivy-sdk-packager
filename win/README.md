@@ -45,6 +45,13 @@ are verified before and after a successful suite; the constraints and verificati
 results are printed in the job log. This checks which wheel archives were installed,
 without tracing every native DLL loaded by a provider.
 
+GLEW's Python 3.9/3.10 rows additionally test the published Kivy 2.3.1 binary
+wheel in a fresh environment with the candidate GLEW runtime wheel. Mesa 26.0.3
+llvmpipe supplies software desktop OpenGL on the Windows runner.
+`ci/glew_smoke.py` checks the initialized GLEW backend, OpenGL 2.0 support,
+the loaded DLL's path/hash against the candidate wheel, and an FBO pixel.
+GLEW publication follows both integration and smoke checks.
+
 The separate [Windows CI helper tests](../.github/workflows/windows_ci_tests.yml)
 workflow runs `ci/tests/test_local_wheels.py` once on relevant PRs/pushes using
 Python 3.9, the oldest supported interpreter. These regressions test selection,
