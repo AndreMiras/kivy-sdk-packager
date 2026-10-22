@@ -176,7 +176,11 @@ jobs:
         if ($LASTEXITCODE -ne 0) { throw 'Importing ANGLE 0.4.0 trial packages failed' }
     - name: Test package
       run: |
+        python -m pip install --only-binary=:all: Pillow==11.3.0
+        if ($LASTEXITCODE -ne 0) { throw 'Installing the Pillow 11.3.0 trial wheel failed' }
+        python -c "import PIL, PIL._imaging; print('Pillow compatibility trial:', PIL.__version__, PIL._imaging.__file__)"
+        if ($LASTEXITCODE -ne 0) { throw 'Importing the Pillow 11.3.0 native extension failed' }
         . .\ci\windows_ci.ps1
-        Test-kivy -KivyTestTarget stable
+        Test-kivy -KivyTestTarget stable -PillowTrial
         python ci/check_wheel_origins.py angle04-wheel-constraints.txt
         if ($LASTEXITCODE -ne 0) { throw 'ANGLE 0.4.0 post-suite origin verification failed' }

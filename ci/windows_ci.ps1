@@ -46,7 +46,8 @@ function Upload-windows-wheels-to-server($ip) {
 function Test-kivy {
     Param(
         [ValidateSet('stable', 'development')]
-        [string]$KivyTestTarget = 'development'
+        [string]$KivyTestTarget = 'development',
+        [switch]$PillowTrial
     )
 
     if ($env:PACKAGE_TARGET -cnotin @('angle', 'glew', 'gstreamer', 'sdl2', 'sdl3')) {
@@ -135,6 +136,17 @@ function Test-kivy {
     # Older Kivy checkouts also declare dependency constraints in setup.cfg.
     if (Test-Path -Path kivy_src/setup.cfg -PathType Leaf) {
         ((get-content -Path kivy_src/setup.cfg -Raw -ErrorAction Stop) -replace "kivy_deps.$env:PACKAGE_TARGET~.+;","kivy_deps.$env:PACKAGE_TARGET;") | set-content -Path kivy_src/setup.cfg -ErrorAction Stop
+    }
+
+    if ($PillowTrial) {
+        $setupConfig = Get-Content -Path kivy_src/setup.cfg -Raw -ErrorAction Stop
+        $pillowRequirement = 'pillow>=9.5.0,<11'
+        if (([Regex]::Matches($setupConfig, [Regex]::Escape($pillowRequirement))).Count -ne 2) {
+            throw 'Expected the original Pillow requirement in both Kivy base/full extras'
+        }
+        $setupConfig.Replace($pillowRequirement, 'pillow==11.3.0') |
+            Set-Content -Path kivy_src/setup.cfg -ErrorAction Stop
+        Write-Host 'Pillow compatibility trial: pillow>=9.5.0,<11 -> pillow==11.3.0'
     }
 
     $installArgs += './kivy_src[full,dev]'
