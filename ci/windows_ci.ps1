@@ -47,7 +47,8 @@ function Test-kivy {
     Param(
         [ValidateSet('stable', 'development')]
         [string]$KivyTestTarget = 'development',
-        [switch]$PillowTrial
+        [switch]$PillowTrial,
+        [switch]$FStringParserTrial
     )
 
     if ($env:PACKAGE_TARGET -cnotin @('angle', 'glew', 'gstreamer', 'sdl2', 'sdl3')) {
@@ -147,6 +148,21 @@ function Test-kivy {
         $setupConfig.Replace($pillowRequirement, 'pillow==11.3.0') |
             Set-Content -Path kivy_src/setup.cfg -ErrorAction Stop
         Write-Host 'Pillow compatibility trial: pillow>=9.5.0,<11 -> pillow==11.3.0'
+    }
+
+    if ($FStringParserTrial) {
+        $parserPatchPath = Join-Path (Get-Location).Path 'kivy-fstring-py314.patch'
+        Invoke-WebRequest -Uri 'https://github.com/kivy/kivy/commit/4b20740cb63b03fdfb65b782f1ce3de42bd6e7b3.patch' -OutFile $parserPatchPath -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $parserPatchPath -Algorithm SHA256 -ErrorAction Stop).Hash -ne 'd282e964c62e7292a088892d1fa6932d9c205f53d5952004b5f8bebd17761b16') {
+            throw 'Upstream KV parser patch hash mismatch'
+        }
+        git -C kivy_src apply --check $parserPatchPath
+        if ($LASTEXITCODE -ne 0) { throw 'Checking the upstream KV parser patch failed' }
+        git -C kivy_src apply $parserPatchPath
+        if ($LASTEXITCODE -ne 0) { throw 'Applying the upstream KV parser patch failed' }
+        Write-Host 'KV parser compatibility trial: applied upstream 4b20740 (#9157)'
+        git -C kivy_src diff -- kivy/lang/parser.py
+        if ($LASTEXITCODE -ne 0) { throw 'Reporting the KV parser trial changes failed' }
     }
 
     $installArgs += './kivy_src[full,dev]'

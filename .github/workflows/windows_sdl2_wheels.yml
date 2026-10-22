@@ -181,6 +181,6 @@ jobs:
         python -c "import PIL, PIL._imaging; print('Pillow compatibility trial:', PIL.__version__, PIL._imaging.__file__)"
         if ($LASTEXITCODE -ne 0) { throw 'Importing the Pillow 11.3.0 native extension failed' }
         . .\ci\windows_ci.ps1
-        Test-kivy -KivyTestTarget stable -PillowTrial
+        Test-kivy -KivyTestTarget stable -PillowTrial -FStringParserTrial
         python ci/check_wheel_origins.py angle04-wheel-constraints.txt
         if ($LASTEXITCODE -ne 0) { throw 'ANGLE 0.4.0 post-suite origin verification failed' }
