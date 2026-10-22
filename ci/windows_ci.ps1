@@ -47,6 +47,7 @@ function Test-kivy {
     Param(
         [ValidateSet('stable', 'development')]
         [string]$KivyTestTarget = 'development',
+        [switch]$Angle05Trial,
         [switch]$PillowTrial,
         [switch]$FStringParserTrial
     )
@@ -137,6 +138,17 @@ function Test-kivy {
     # Older Kivy checkouts also declare dependency constraints in setup.cfg.
     if (Test-Path -Path kivy_src/setup.cfg -PathType Leaf) {
         ((get-content -Path kivy_src/setup.cfg -Raw -ErrorAction Stop) -replace "kivy_deps.$env:PACKAGE_TARGET~.+;","kivy_deps.$env:PACKAGE_TARGET;") | set-content -Path kivy_src/setup.cfg -ErrorAction Stop
+    }
+
+    if ($Angle05Trial) {
+        $setupConfig = Get-Content -Path kivy_src/setup.cfg -Raw -ErrorAction Stop
+        $angleRequirement = 'kivy_deps.angle~=0.4.0'
+        if (([Regex]::Matches($setupConfig, [Regex]::Escape($angleRequirement))).Count -ne 2) {
+            throw 'Expected the original ANGLE requirement in Kivy install_requires and angle extra'
+        }
+        $setupConfig.Replace($angleRequirement, 'kivy_deps.angle==0.5.0') |
+            Set-Content -Path kivy_src/setup.cfg -ErrorAction Stop
+        Write-Host 'ANGLE compatibility trial: kivy_deps.angle~=0.4.0 -> kivy_deps.angle==0.5.0'
     }
 
     if ($PillowTrial) {

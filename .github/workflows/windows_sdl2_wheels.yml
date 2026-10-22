@@ -11,7 +11,7 @@ on:
       - '.github/workflows/windows_sdl2_wheels.yml'
   push:
     branches:
-      - ci/sdl2-py314-angle04-trial
+      - ci/sdl2-py314-angle05-trial
     paths:
       - 'win/common.py'
       - 'win/sdl2.py'
@@ -112,68 +112,61 @@ jobs:
         TWINE_PASSWORD: ${{ secrets.pypi_password }}
       run: |
         twine upload --non-interactive dist/*
-    - name: Prepare ANGLE 0.4.0 cp314 trial wheels
+    - name: Prepare published ANGLE 0.5.0 cp314 trial wheels
       run: |
-        python -m pip install wheel==0.45.1
-        if ($LASTEXITCODE -ne 0) { throw 'Installing the wheel retagging tool failed' }
-        python -m pip download --index-url https://pypi.org/simple --no-deps --only-binary=:all: --platform win_amd64 --implementation cp --python-version 3.13 --abi cp313 --dest angle04_sources kivy-deps.angle==0.4.0 kivy-deps.angle-dev==0.4.0
-        if ($LASTEXITCODE -ne 0) { throw 'Downloading the published ANGLE 0.4.0 pair failed' }
+        python -m pip download --index-url https://pypi.org/simple --no-deps --only-binary=:all: --platform win_amd64 --implementation cp --python-version 3.14 --abi cp314 --dest angle05_sources kivy-deps.angle==0.5.0 kivy-deps.angle-dev==0.5.0
+        if ($LASTEXITCODE -ne 0) { throw 'Downloading the published ANGLE 0.5.0 pair failed' }
         @'
         import hashlib
         from email.parser import Parser
         from pathlib import Path
-        import subprocess
-        import sys
         import zipfile
 
         sources = {
-            'kivy_deps.angle-0.4.0-cp313-cp313-win_amd64.whl':
-                '9afbf702f8bb9a993c48f39c018ca3b4d2ec381a5d3f82fe65bdaa6af0bba29b',
-            'kivy_deps.angle_dev-0.4.0-cp313-cp313-win_amd64.whl':
-                '03fe26cddf9cf04f7579fd5d25f44a205d2e4cd9f9a5ee40a347ce5a59b87822',
+            'kivy_deps_angle-0.5.0-cp314-cp314-win_amd64.whl': (
+                'kivy_deps.angle',
+                'baaa35e153f053e23ef3de8c6f96e3aa6a59ea74d9d9b0bd104b7cb534f03f15'),
+            'kivy_deps_angle_dev-0.5.0-cp314-cp314-win_amd64.whl': (
+                'kivy_deps.angle_dev',
+                '6378db32e193a1427acbc4ebb7de0832fe87033c63bdc32c5d03de04a83ea173'),
         }
         constraints = []
-        for filename, expected in sources.items():
-            source = (Path('angle04_sources') / filename).resolve(strict=True)
-            if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+        for filename, (name, expected) in sources.items():
+            source = (Path('angle05_sources') / filename).resolve(strict=True)
+            payload = source.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != expected:
                 raise RuntimeError('Published ANGLE source hash mismatch: ' + filename)
-            subprocess.run([sys.executable, '-m', 'wheel', 'tags', '--python-tag', 'cp314',
-                            '--abi-tag', 'cp314', '--platform-tag', 'win_amd64', str(source)],
-                           check=True)
-            candidate = source.with_name(filename.replace('-cp313-cp313-', '-cp314-cp314-'))
-            with zipfile.ZipFile(source) as original, zipfile.ZipFile(candidate) as repacked:
-                members = set(original.namelist())
-                if members != set(repacked.namelist()):
-                    raise RuntimeError('ANGLE archive members changed')
-                changed = {name for name in members if original.read(name) != repacked.read(name)}
+            with zipfile.ZipFile(source) as archive:
+                members = set(archive.namelist())
                 wheel = next(name for name in members if name.endswith('.dist-info/WHEEL'))
-                record = next(name for name in members if name.endswith('.dist-info/RECORD'))
-                if changed != {wheel, record}:
-                    raise RuntimeError('ANGLE payload changed during retagging')
-                tags = Parser().parsestr(repacked.read(wheel).decode('utf8')).get_all('Tag')
+                tags = Parser().parsestr(archive.read(wheel).decode('utf8')).get_all('Tag')
                 if tags != ['cp314-cp314-win_amd64']:
                     raise RuntimeError('Incorrect ANGLE wheel tags')
-                for name in sorted(members):
-                    if name.lower().endswith('.dll'):
+                metadata = next(member for member in members if member.endswith('.dist-info/METADATA'))
+                metadata = Parser().parsestr(archive.read(metadata).decode('utf8'))
+                if metadata['Name'] != name or metadata['Version'] != '0.5.0':
+                    raise RuntimeError('Incorrect ANGLE distribution metadata')
+                for member in sorted(members):
+                    if member.lower().endswith('.dll'):
                         print('ANGLE native payload: {} sha256={}'.format(
-                            Path(name).name, hashlib.sha256(repacked.read(name)).hexdigest()), flush=True)
-            target = (Path('dist') / candidate.name).resolve()
-            target.write_bytes(candidate.read_bytes())
-            reference = '{}#sha256={}'.format(target.as_uri(), hashlib.sha256(target.read_bytes()).hexdigest())
-            constraint = '{} @ {}'.format(filename.split('-')[0], reference)
+                            Path(member).name, hashlib.sha256(archive.read(member)).hexdigest()), flush=True)
+            target = (Path('dist') / filename).resolve()
+            target.write_bytes(payload)
+            reference = '{}#sha256={}'.format(target.as_uri(), expected)
+            constraint = '{} @ {}'.format(name, reference)
             constraints.append(constraint)
             print('ANGLE local wheel: ' + constraint, flush=True)
-        Path('angle04-wheel-constraints.txt').write_text('\n'.join(constraints) + '\n', encoding='utf8')
+        Path('angle05-wheel-constraints.txt').write_text('\n'.join(constraints) + '\n', encoding='utf8')
         '@ | python -
-        if ($LASTEXITCODE -ne 0) { throw 'Preparing verified ANGLE 0.4.0 cp314 wheels failed' }
-        $angleWheels = @(Get-ChildItem -LiteralPath dist -Filter 'kivy_deps*angle*-cp314-cp314-win_amd64.whl' -File | ForEach-Object { $_.FullName })
-        if ($angleWheels.Count -ne 2) { throw 'Expected the ANGLE 0.4.0 cp314 runtime/development pair' }
+        if ($LASTEXITCODE -ne 0) { throw 'Preparing verified ANGLE 0.5.0 cp314 wheels failed' }
+        $angleWheels = @(Get-ChildItem -LiteralPath dist -Filter 'kivy_deps_angle*-0.5.0-cp314-cp314-win_amd64.whl' -File | ForEach-Object { $_.FullName })
+        if ($angleWheels.Count -ne 2) { throw 'Expected the ANGLE 0.5.0 cp314 runtime/development pair' }
         python -m pip install --no-index --no-deps --force-reinstall @angleWheels
-        if ($LASTEXITCODE -ne 0) { throw 'Installing the explicit ANGLE 0.4.0 trial wheels failed' }
-        python ci/check_wheel_origins.py angle04-wheel-constraints.txt
-        if ($LASTEXITCODE -ne 0) { throw 'ANGLE 0.4.0 pre-suite origin verification failed' }
-        python -c "from kivy_deps import angle, angle_dev; print('ANGLE trial versions:', angle.__version__, angle_dev.__version__)"
-        if ($LASTEXITCODE -ne 0) { throw 'Importing ANGLE 0.4.0 trial packages failed' }
+        if ($LASTEXITCODE -ne 0) { throw 'Installing the explicit ANGLE 0.5.0 trial wheels failed' }
+        python ci/check_wheel_origins.py angle05-wheel-constraints.txt
+        if ($LASTEXITCODE -ne 0) { throw 'ANGLE 0.5.0 pre-suite origin verification failed' }
+        python -c "from kivy_deps import angle, angle_dev; assert angle.__version__ == angle_dev.__version__ == '0.5.0'; print('ANGLE trial versions:', angle.__version__, angle_dev.__version__)"
+        if ($LASTEXITCODE -ne 0) { throw 'Importing ANGLE 0.5.0 trial packages failed' }
     - name: Test package
       run: |
         python -m pip install --only-binary=:all: Pillow==11.3.0
@@ -181,6 +174,6 @@ jobs:
         python -c "import PIL, PIL._imaging; print('Pillow compatibility trial:', PIL.__version__, PIL._imaging.__file__)"
         if ($LASTEXITCODE -ne 0) { throw 'Importing the Pillow 11.3.0 native extension failed' }
         . .\ci\windows_ci.ps1
-        Test-kivy -KivyTestTarget stable -PillowTrial -FStringParserTrial
-        python ci/check_wheel_origins.py angle04-wheel-constraints.txt
-        if ($LASTEXITCODE -ne 0) { throw 'ANGLE 0.4.0 post-suite origin verification failed' }
+        Test-kivy -KivyTestTarget stable -Angle05Trial -PillowTrial -FStringParserTrial
+        python ci/check_wheel_origins.py angle05-wheel-constraints.txt
+        if ($LASTEXITCODE -ne 0) { throw 'ANGLE 0.5.0 post-suite origin verification failed' }
