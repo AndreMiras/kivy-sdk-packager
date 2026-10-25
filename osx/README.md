@@ -5,11 +5,15 @@ This repository contains the scripts for packaging a Kivy based app into a insta
 
 **Important notice:** macOS 11 (or greater), with XCode 12.2 (or greater) is required to build a fully working universal2 ``.app`` due to https://bugs.python.org/issue42619
 
+Build prerequisites include Python 3, Platypus at ``/usr/local/bin/platypus``, Git
+for remote Kivy sources, and ``brew install pkg-config cmake ninja meson``.
+
 Kivy versions supported: ``2.2.0+``. For older Kivy versions, use the corresponding stable branch.
 
 The packaged ``.app`` contains a Python virtualenv with ``kivy`` and its dependencies pre-installed.
 
-SDL2 frameworks are included in the app bundle, and the Kivy installation is configured to use them.
+The app includes the selected Kivy source's frameworks: SDL3, libpng, ThorVG,
+and ANGLE runtimes for current ``master``, or SDL2/libpng for older selections.
 
 Kivy, on every release, provides a ``Kivy.app`` that can be used as a base for your app, so you don't need to build it from scratch.
 Below are the steps to use the ``Kivy.app`` as a base for your app, or to build your app from scratch.
@@ -24,7 +28,15 @@ Below are the steps to use the ``Kivy.app`` as a base for your app, or to build 
 
     For all the configuration options, you can run ``./create-osx-bundle.sh -h``.
 
-    This will build from scratch all the requirements (openssl, SDL2, SDL2_image, SDL2_mixer, SDL2_ttf, python3).
+    ``-k`` accepts a Git tag, branch, commit, or local source directory.
+    The default ``master`` is resolved once per build (independently in each
+    CI job), and Kivy and its dependency helpers use that same source.
+    Local sources include uncommitted changes and must live outside the
+    disposable ``osx/build`` directory, which is deleted before building.
+
+    This builds Python, OpenSSL, and the selected Kivy source's native dependencies
+    (currently SDL3, SDL3_image, SDL3_mixer, SDL3_ttf, libpng, and ThorVG, with
+    prebuilt universal2 ANGLE libraries).
     A ``build`` directory is created to contain the``MyApp.app`` directory, where ``MyApp`` is the app's name.
   * To use the existing Kivy app bundle:
     * Download the Kivy app from the Kivy download page, the GitHub releases, or the

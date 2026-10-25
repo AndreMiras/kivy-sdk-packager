@@ -59,14 +59,30 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# get kivy path or url
+PYTHON=python3
+BUILD_FOLDER="$(pwd -P)/build"
+LOCAL_KIVY=0
+
+# Resolve and validate local input before the disposable build tree is removed.
 if [ -d "$KIVY_PATH" ]; then
-    # get full path
-    pushd "$KIVY_PATH"
-    KIVY_PATH="$(pwd)"
-    popd
-else
-    KIVY_PATH="https://github.com/kivy/kivy/archive/$KIVY_PATH.zip"
+    KIVY_PATH=$("$PYTHON" - "$KIVY_PATH" "$BUILD_FOLDER" <<'PY'
+from pathlib import Path
+import sys
+
+source, build = (Path(arg).resolve() for arg in sys.argv[1:])
+if source == build or build in source.parents:
+    sys.exit(f"Local Kivy source must be outside the disposable build directory: {build}")
+print(source)
+PY
+)
+    if [ ! -f "$KIVY_PATH/tools/build_macos_dependencies.sh" ]; then
+        echo "Missing tools/build_macos_dependencies.sh in $KIVY_PATH" >&2
+        exit 1
+    fi
+    LOCAL_KIVY=1
+    if [ -e "$KIVY_PATH/.git" ] && KIVY_COMMIT=$(git -C "$KIVY_PATH" rev-parse HEAD 2>/dev/null); then
+        echo "Local Kivy HEAD: $KIVY_COMMIT (including local changes)"
+    fi
 fi
 
 echo "Using Kivy $KIVY_PATH"
@@ -81,7 +97,6 @@ if [ ! -f "$PLATYPUS" ]; then
 fi
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-PYTHON=python3
 
 # follow any symbolic links
 if [ -h "${SCRIPT_PATH}" ]; then
@@ -90,11 +105,25 @@ if [ -h "${SCRIPT_PATH}" ]; then
     done
 fi
 
-SCRIPT_PATH=$($PYTHON -c "import os; print(os.path.realpath(os.path.dirname('$SCRIPT_PATH')))")
+SCRIPT_PATH=$("$PYTHON" -c 'import os, sys; print(os.path.realpath(os.path.dirname(sys.argv[1])))' "$SCRIPT_PATH")
 
 echo "-- Clean previous build (if any) and move to build folder"
 rm -rf build
 mkdir build
+
+if [ "$LOCAL_KIVY" -eq 0 ]; then
+    echo "-- Resolve Kivy ref $KIVY_PATH"
+    git init "$BUILD_FOLDER/kivy-source"
+    git -C "$BUILD_FOLDER/kivy-source" remote add origin https://github.com/kivy/kivy.git
+    git -C "$BUILD_FOLDER/kivy-source" fetch --depth 1 origin "$KIVY_PATH"
+    git -C "$BUILD_FOLDER/kivy-source" checkout --detach FETCH_HEAD
+    KIVY_PATH="$BUILD_FOLDER/kivy-source"
+    echo "Resolved Kivy commit: $(git -C "$KIVY_PATH" rev-parse HEAD)"
+    if [ ! -f "$KIVY_PATH/tools/build_macos_dependencies.sh" ]; then
+        echo "Missing tools/build_macos_dependencies.sh in $KIVY_PATH" >&2
+        exit 1
+    fi
+fi
 
 echo "-- Create initial $APP_NAME.app package"
 $PLATYPUS -DBR -y \
@@ -109,22 +138,14 @@ $PLATYPUS -DBR -y \
     "$SCRIPT_PATH/build/$APP_NAME.app"
 
 # Platypus? sets non-blocking mode. That was leading to an error during openssl or python3 build.
-$PYTHON -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
+"$PYTHON" -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
 
 echo "-- Entering build folder"
-BUILD_FOLDER=$(pwd)/build
-pushd $BUILD_FOLDER
+pushd "$BUILD_FOLDER"
 
 echo "-- Download needed files"
 curl -L -O "http://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
 curl -L -O "https://www.python.org/ftp/python/${PYVER}/Python-${PYVER}.tgz"
-
-echo "-- Copy the Kivy dependencies build script, or download it (from master) if not available"
-if [ -f "$KIVY_PATH/tools/build_macos_dependencies.sh" ]; then
-    cp "$KIVY_PATH/tools/build_macos_dependencies.sh" .
-else
-    curl -L -O "https://raw.githubusercontent.com/kivy/kivy/master/tools/build_macos_dependencies.sh"
-fi
 
 echo "-- Set MACOSX_DEPLOYMENT_TARGET=11.0"
 export SDKROOT=$(xcrun -sdk macosx --show-sdk-path)
@@ -160,58 +181,56 @@ KIVY_APP_PYTHON_PREFIX="${SCRIPT_PATH}/build/${APP_NAME}.app/Contents/Resources/
 KIVY_APP_PYTHON_BIN="${KIVY_APP_PYTHON_PREFIX}/bin/python3"
 tar -xvf "Python-${PYVER}.tgz"
 pushd "Python-${PYVER}"
-PKG_CONFIG="" ./configure --prefix=$KIVY_APP_PYTHON_PREFIX --enable-universalsdk --disable-test-modules --with-universal-archs=universal2 --with-openssl=../openssl
+PKG_CONFIG="" ./configure --prefix="$KIVY_APP_PYTHON_PREFIX" --enable-universalsdk --disable-test-modules --with-universal-archs=universal2 --with-openssl=../openssl
 make
 make install
 popd
 
+echo "-- Prepare build tools using the bundled Python, outside the app"
+"$KIVY_APP_PYTHON_BIN" -m venv "$BUILD_FOLDER/build-tools"
+BUILD_PYTHON="$BUILD_FOLDER/build-tools/bin/python"
+"$BUILD_PYTHON" -m pip install pip-tools -r "$SCRIPT_PATH/requirements.txt"
+
 echo "-- Build Kivy dependencies via build_macos_dependencies.sh"
-chmod +x build_macos_dependencies.sh
-./build_macos_dependencies.sh
+bash "$KIVY_PATH/tools/build_macos_dependencies.sh"
 
 echo "-- Ensure KIVY_DEPS_ROOT is set to the dependencies folder"
 export KIVY_DEPS_ROOT=$(pwd)/kivy-dependencies
 
-echo "-- Write (or load, and add Kivy) the requirements.in file"
-if [ -d "$KIVY_PATH" ]; then
-    KIVY_REQ_LINE="${KIVY_PATH}[${EXTRAS}]"
-else
-    KIVY_REQ_LINE="kivy[${EXTRAS}] @ $KIVY_PATH"
-fi
-echo $KIVY_REQ_LINE > kivy-app-requirements.in
+echo "-- Write the selected Kivy source and extras to requirements.in"
+"$BUILD_PYTHON" - "$KIVY_PATH" "$EXTRAS" > kivy-app-requirements.in <<'PY'
+from pathlib import Path
+import sys
+
+source, extras = sys.argv[1:]
+print(f"Kivy[{extras}] @ {Path(source).as_uri()}")
+PY
 
 echo "-- Compile the requirements.txt file via pip-compile, so we have a full list of dependencies"
 # This step is needed as the --platform option during pip install requires --no-deps
-pip install pip-tools
-pip-compile kivy-app-requirements.in --no-annotate --no-header -o kivy-app-requirements.txt
+# cryptography 49 dropped Intel macOS wheels.
+echo 'cryptography<49' > kivy-app-constraints.txt
+"$BUILD_PYTHON" -m piptools compile kivy-app-requirements.in --constraint kivy-app-constraints.txt --no-annotate --no-header -o kivy-app-requirements.txt
 
 echo "-- Call prepare-wheels.py to download (and fuse) all the wheels and source distributions"
-pip install -r ../requirements.txt
 WHEELS_FOLDER=$(pwd)/wheels
-$PYTHON ../prepare-wheels.py --requirements-file kivy-app-requirements.txt --python-version $PYVER --deployment-target $MACOSX_DEPLOYMENT_TARGET --output-folder $WHEELS_FOLDER
+SSL_CERT_FILE="${SSL_CERT_FILE:-$("$BUILD_PYTHON" -c 'from pip._vendor import certifi; print(certifi.where())')}" \
+"$BUILD_PYTHON" "$SCRIPT_PATH/prepare-wheels.py" --requirements-file kivy-app-requirements.txt --python-version "$PYVER" --deployment-target "$MACOSX_DEPLOYMENT_TARGET" --output-folder "$WHEELS_FOLDER"
 
 echo "-- Create a virtualenv in ${APP_NAME}.app/Contents/Resources"
 pushd "$APP_NAME.app/Contents/Resources/"
-$KIVY_APP_PYTHON_BIN -m pip install --upgrade pip virtualenv --user
-$KIVY_APP_PYTHON_BIN -m venv venv
+"$KIVY_APP_PYTHON_BIN" -m venv venv
+APP_PYTHON="$BUILD_FOLDER/$APP_NAME.app/Contents/Resources/venv/bin/python"
 
 echo "-- Activate the just created virtualenv"
 source venv/bin/activate
 popd
 
 echo "-- Install the requirements via pip"
-SITE_PACKAGES_DIR=$(python -c "import site; print(site.getsitepackages()[0])")
+SITE_PACKAGES_DIR=$("$APP_PYTHON" -c "import site; print(site.getsitepackages()[0])")
 
-pip install --platform macosx_11_0_universal2 --find-links=$WHEELS_FOLDER --no-deps --target $SITE_PACKAGES_DIR -r kivy-app-requirements.txt
-
-echo "-- Relocate SDL2 frameworks on Kivy installation folder"
-pushd $SITE_PACKAGES_DIR/kivy
-python3 -m pip install git+https://github.com/tito/osxrelocator
-osxrelocator -r . @rpath/SDL2.framework/Versions/A/SDL2 @executable_path/../../../../Contents/Frameworks/SDL2.framework/Versions/A/SDL2
-osxrelocator -r . @rpath/SDL2_ttf.framework/Versions/A/SDL2_ttf @executable_path/../../../../Contents/Frameworks/SDL2_ttf.framework/Versions/A/SDL2_ttf
-osxrelocator -r . @rpath/SDL2_image.framework/Versions/A/SDL2_image @executable_path/../../../../Contents/Frameworks/SDL2_image.framework/Versions/A/SDL2_image
-osxrelocator -r . @rpath/SDL2_mixer.framework/Versions/A/SDL2_mixer @executable_path/../../../../Contents/Frameworks/SDL2_mixer.framework/Versions/A/SDL2_mixer
-popd
+LDFLAGS="${LDFLAGS:-} -Wl,-headerpad_max_install_names" \
+"$APP_PYTHON" -m pip install --platform macosx_11_0_universal2 --find-links="$WHEELS_FOLDER" --no-deps --target "$SITE_PACKAGES_DIR" -r kivy-app-requirements.txt
 
 echo "-- Deactivate virtualenv, is time to relocate things"
 deactivate
@@ -230,18 +249,108 @@ cp "${SCRIPT_PATH}/data/kivy_activate" "${APP_NAME}.app/Contents/Resources/venv/
 
 
 echo "-- Copy Kivy dependencies into $APP_NAME.app/Contents/Frameworks directory"
-cp -R "$KIVY_DEPS_ROOT/dist/frameworks/." "$APP_NAME.app/Contents/Frameworks"
+cp -R "$KIVY_DEPS_ROOT/dist/Frameworks/." "$APP_NAME.app/Contents/Frameworks"
+
+echo "-- Relocate and sign the bundled native dependencies and Kivy extensions"
+"$BUILD_PYTHON" - "$BUILD_FOLDER/$APP_NAME.app" "$KIVY_DEPS_ROOT" "$SITE_PACKAGES_DIR/kivy" <<'PY'
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+app, dependencies, kivy = (Path(arg).resolve() for arg in sys.argv[1:])
+frameworks = app / "Contents/Frameworks"
+original_frameworks = dependencies / "dist/Frameworks"
 
 
-echo "-- Change png.framework path in SDL2_ttf"
-install_name_tool -change @rpath/png.framework/Versions/1.6.40/png @loader_path/../../../../Frameworks/png.framework/Versions/1.6.40/png "$APP_NAME.app/Contents/Frameworks/SDL2_ttf.framework/Versions/A/SDL2_ttf"
+def otool(flag, binary):
+    return subprocess.check_output(
+        ["otool", "-arch", "all", flag, str(binary)], text=True
+    )
 
-echo "-- Let's fix Frameworks signing."
-codesign -fs - "${APP_NAME}.app/Contents/Frameworks/png.framework/Versions/1.6.40/png"
-codesign -fs - "${APP_NAME}.app/Contents/Frameworks/SDL2.framework/Versions/A/SDL2"
-codesign -fs - "${APP_NAME}.app/Contents/Frameworks/SDL2_ttf.framework/Versions/A/SDL2_ttf"
-codesign -fs - "${APP_NAME}.app/Contents/Frameworks/SDL2_image.framework/Versions/A/SDL2_image"
-codesign -fs - "${APP_NAME}.app/Contents/Frameworks/SDL2_mixer.framework/Versions/A/SDL2_mixer"
+
+def install_ids(binary):
+    lines = (line.strip() for line in otool("-D", binary).splitlines())
+    return {line for line in lines if line and not line.endswith(":")}
+
+
+def load_names(output):
+    return {
+        line.strip().split(" (compatibility version", 1)[0]
+        for line in output.splitlines() if " (compatibility version" in line
+    }
+
+
+def rpaths(output):
+    return set(re.findall(
+        r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", output
+    ))
+
+
+def in_tree(name, root):
+    return name == str(root) or name.startswith(f"{root}/")
+
+
+# Only these framework binaries and the two ANGLE dylibs enter the map.
+runtimes = []
+for framework in sorted(frameworks.glob("*.framework")):
+    canonical = framework / framework.stem
+    runtimes.append((original_frameworks / framework.name / framework.stem, canonical))
+
+require_angle = (
+    (frameworks / "SDL3.framework").is_dir()
+    and os.environ.get("USE_LEGACY_OPENGL", "0") == "0"
+)
+for name in ("libEGL.dylib", "libGLESv2.dylib"):
+    original = dependencies / "dist/lib" / name
+    if original.is_file():
+        bundled = frameworks / name
+        shutil.copy2(original, bundled)
+        runtimes.append((original, bundled))
+    elif require_angle:
+        sys.exit(f"Missing required ANGLE runtime: {original}")
+
+relocations = {}
+runtime_binaries = set()
+for original, canonical in runtimes:
+    binary = canonical.resolve(strict=True)
+    binary.relative_to(app)  # Never mutate an input through an external symlink.
+    runtime_binaries.add(binary)
+    for alias in install_ids(binary) | {str(original), str(original.resolve())}:
+        relocations[alias] = binary
+
+extensions = {path.resolve(strict=True) for path in kivy.rglob("*.so")}
+if not extensions:
+    sys.exit(f"No installed Kivy native extensions found in {kivy}")
+consumers = sorted(extensions | runtime_binaries)
+for consumer in consumers:
+    consumer.relative_to(app)
+    ids = install_ids(consumer)
+    for old in sorted(load_names(otool("-L", consumer)) - ids):
+        if old in relocations:
+            relative = os.path.relpath(relocations[old], consumer.parent)
+            subprocess.check_call([
+                "install_name_tool", "-change", old,
+                f"@loader_path/{relative}", str(consumer),
+            ])
+    for rpath in sorted(rpaths(otool("-l", consumer))):
+        if in_tree(rpath, dependencies):
+            subprocess.check_call([
+                "install_name_tool", "-delete_rpath", rpath, str(consumer)
+            ])
+    if consumer in runtime_binaries and any(in_tree(name, dependencies.parent) for name in ids):
+        canonical = next(path for _, path in runtimes if path.resolve() == consumer)
+        subprocess.check_call([
+            "install_name_tool", "-id",
+            f"@rpath/{canonical.relative_to(frameworks)}", str(consumer),
+        ])
+
+# Sign after all install-name/rpath mutations, including extension modules.
+for consumer in consumers:
+    subprocess.check_call(["codesign", "--force", "--sign", "-", str(consumer)])
+PY
 
 echo "-- Launch relocate.sh to relocate deps"
 ../relocate.sh "$APP_NAME.app"
